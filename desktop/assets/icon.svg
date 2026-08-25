@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="180" y1="120" x2="860" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2B2E29"/>
+      <stop offset="1" stop-color="#151714"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="28"/>
+    </filter>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="218" fill="url(#bg)"/>
+  <rect x="58" y="58" width="908" height="908" rx="194" fill="none" stroke="#FFFFFF" stroke-opacity=".08" stroke-width="10"/>
+  <ellipse cx="500" cy="576" rx="296" ry="204" fill="#000" opacity=".28" filter="url(#shadow)"/>
+  <g fill="none" stroke="#78D9AE" stroke-width="62" stroke-linecap="round">
+    <path d="M238 522v54"/>
+    <path d="M348 410v278"/>
+    <path d="M458 310v474"/>
+    <path d="M568 382v330"/>
+    <path d="M678 462v170"/>
+  </g>
+  <path d="M802 202c12 70 44 102 114 114-70 12-102 44-114 114-12-70-44-102-114-114 70-12 102-44 114-114Z" fill="#F08770"/>
+  <circle cx="802" cy="316" r="28" fill="#FFF4E9"/>
+</svg>

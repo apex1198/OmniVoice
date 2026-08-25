@@ -134,6 +134,40 @@ For full usage, see the [Python API](#python-api) and [Command-Line Tools](#comm
 
 ---
 
+## Omni Speak for macOS
+
+The `desktop/` directory contains Omni Speak, a native Electron workspace for
+Apple Silicon Macs. On first launch, **Magic Setup** creates an isolated Python
+runtime, installs the local FastAPI engine, and downloads the OmniVoice and
+Whisper models. Models, saved voices, projects, jobs, and generated audio stay
+under `~/Library/Application Support/omni-speak/`.
+
+Omni Speak includes Voice Clone, Voice Design, persistent saved voices,
+projects, render history, a resumable long-form queue, WAV/FLAC export, and up
+to four speakers per script. Assign a saved voice to each cast member and mark
+dialogue with one of these prefixes:
+
+```text
+@[Speaker 1] Welcome to Omni Speak.
+@[Speaker 2] This line uses the second saved voice.
+@[Speaker 3] Scripts can use up to four speakers.
+@[Speaker 4] Every render is stored in the project history.
+```
+
+Build the unsigned local application with:
+
+```bash
+cd desktop
+npm install
+npm run dist
+```
+
+The build is written to `OmniSpeakBuild/mac-arm64/Omni Speak.app` next to the
+repository directory. This local build is ad-hoc signed during installation;
+distribution to other Macs requires an Apple Developer ID and notarization.
+
+---
+
 ## Python API
 
 OmniVoice supports three generation modes. All features in this section are also available via [command-line tools](#command-line-tools).

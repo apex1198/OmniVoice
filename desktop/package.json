@@ -1,0 +1,76 @@
+{
+  "name": "omni-speak",
+  "version": "1.0.2",
+  "description": "Native macOS desktop shell for OmniVoice",
+  "main": "main.js",
+  "author": "Omni Speak",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build:renderer": "esbuild src/renderer.js --bundle --format=iife --outfile=dist/renderer.js",
+    "start": "npm run build:renderer && electron .",
+    "dist": "npm run build:renderer && electron-builder --mac dir"
+  },
+  "build": {
+    "appId": "local.omnispeak.desktop",
+    "productName": "Omni Speak",
+    "directories": {
+      "output": "/Users/alexcrearive/Documents/ChatGPT/OmniSpeakBuild"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "styles.css",
+      "dist/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "omni-speak-backend",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "../omnivoice",
+        "to": "omnivoice-source/omnivoice",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "../pyproject.toml",
+        "to": "omnivoice-source/pyproject.toml"
+      },
+      {
+        "from": "../README.md",
+        "to": "omnivoice-source/README.md"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "omnivoice-source/LICENSE"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "icon": "assets/OmniSpeak.icns",
+      "identity": null,
+      "target": [
+        "dir"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "lucide": "^1.34.0"
+  }
+}

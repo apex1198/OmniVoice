@@ -26,5 +26,7 @@ examples/data*
 examples/download*
 examples/exp*
 .claude/
+node_modules/
+desktop/index 2.html
 *.wav
 *.jsonl
