@@ -82,6 +82,27 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(job["status"], "pending")
             self.assertEqual(len(job["segments"]), 1)
 
+    def test_recovers_jobs_after_engine_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(Path(directory) / "test.sqlite3")
+            project = db.save_project({"name": "Recovery"})
+            voice_id = db.list_voices()[0]["id"]
+            payload = {
+                "project_id": project["id"],
+                "text": "Resume this render.",
+                "speaker_map": {"Speaker 1": voice_id},
+                "config": {},
+            }
+            running = db.create_job(payload, [{"speaker": "Speaker 1", "text": payload["text"]}])
+            db.update_job(running["id"], status="running")
+            cancelled = db.create_job(payload, [{"speaker": "Speaker 1", "text": payload["text"]}])
+            db.cancel_job(cancelled["id"])
+
+            db.recover_interrupted_jobs()
+
+            self.assertEqual(db.get_job(running["id"])["status"], "pending")
+            self.assertEqual(db.get_job(cancelled["id"])["status"], "cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()

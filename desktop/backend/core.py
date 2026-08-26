@@ -280,6 +280,19 @@ class Database:
             )
         return self.get_voice(voice["id"])
 
+    def update_voice(self, voice_id, **values):
+        allowed = {
+            "name", "prompt_path", "source_audio_path", "transcript",
+            "instruct", "metadata_json",
+        }
+        updates = {key: value for key, value in values.items() if key in allowed}
+        if not updates:
+            return self.get_voice(voice_id)
+        columns = ",".join(f"{key}=?" for key in updates)
+        with self.connect() as db:
+            db.execute(f"UPDATE voices SET {columns} WHERE id=?", [*updates.values(), voice_id])
+        return self.get_voice(voice_id)
+
     def delete_voice(self, voice_id):
         with self.connect() as db:
             row = db.execute("SELECT metadata_json FROM voices WHERE id=?", (voice_id,)).fetchone()
@@ -330,6 +343,26 @@ class Database:
         with self.connect() as db:
             row = db.execute("SELECT id FROM jobs WHERE status='pending' ORDER BY created_at LIMIT 1").fetchone()
             return self.get_job(row["id"]) if row else None
+
+    def recover_interrupted_jobs(self):
+        with self.connect() as db:
+            running_ids = [
+                row["id"] for row in db.execute("SELECT id FROM jobs WHERE status='running'")
+            ]
+            if running_ids:
+                placeholders = ",".join("?" for _ in running_ids)
+                db.execute(
+                    f"UPDATE segments SET status='pending',error=NULL WHERE job_id IN ({placeholders}) AND status='running'",
+                    running_ids,
+                )
+                db.execute(
+                    f"UPDATE jobs SET status='pending',error=NULL,updated_at=? WHERE id IN ({placeholders})",
+                    [now_iso(), *running_ids],
+                )
+            db.execute(
+                "UPDATE jobs SET status='cancelled',updated_at=? WHERE status='cancel_requested'",
+                (now_iso(),),
+            )
 
     def update_job(self, job_id, **values):
         if not values:

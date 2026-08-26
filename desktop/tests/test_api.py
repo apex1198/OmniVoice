@@ -23,13 +23,15 @@ class FakeModel:
     def __init__(self):
         self._asr_pipe = None
         self.last_generation_config = None
+        self.last_generation_kwargs = None
 
     def generate(self, **kwargs):
         self.last_generation_config = kwargs["generation_config"]
+        self.last_generation_kwargs = kwargs
         return [np.zeros(2400, dtype=np.float32)]
 
-    def create_voice_clone_prompt(self, ref_audio, ref_text):
-        return FakePrompt(ref_text)
+    def create_voice_clone_prompt(self, ref_audio, ref_text, preprocess_prompt=True):
+        return FakePrompt(ref_text or "Aligned reference transcript.")
 
 
 class ApiTests(unittest.TestCase):
@@ -93,6 +95,27 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.engine.model.last_generation_config.num_step, 8)
         self.assertFalse(self.engine.model.last_generation_config.postprocess_output)
+
+    def test_clone_jobs_use_short_chunks(self):
+        clone = self.engine.db.save_voice({
+            "id": "voice_clone_test",
+            "name": "Clone",
+            "kind": "clone",
+            "prompt_path": str(Path(self.directory.name) / "clone.pt"),
+            "source_audio_path": str(Path(self.directory.name) / "clone.wav"),
+            "transcript": "Reference.",
+            "metadata": {"prompt_version": 2},
+        })
+        Path(clone["prompt_path"]).write_bytes(b"prompt")
+        text = " ".join(["This sentence tests cloned voice fidelity."] * 12)
+        job = self.client.post("/api/jobs", json={
+            "project_id": "project_inbox",
+            "text": text,
+            "speaker_map": {"Speaker 1": clone["id"]},
+            "config": {"chunk_chars": 450},
+        }).json()
+        self.assertGreater(len(job["segments"]), 1)
+        self.assertTrue(all(len(segment["text"]) <= 180 for segment in job["segments"]))
 
 if __name__ == "__main__":
     unittest.main()

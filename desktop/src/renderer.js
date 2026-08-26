@@ -46,6 +46,47 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function setButtonBusy(button, busy, label = 'Working…') {
+  if (!button) return;
+  if (busy) {
+    button.dataset.idleHtml ||= button.innerHTML;
+    button.disabled = true;
+    button.classList.add('is-loading');
+    button.setAttribute('aria-busy', 'true');
+    button.innerHTML = `<span class="button-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+  } else {
+    button.disabled = false;
+    button.classList.remove('is-loading');
+    button.removeAttribute('aria-busy');
+    if (button.dataset.idleHtml) button.innerHTML = button.dataset.idleHtml;
+  }
+}
+
+function toast(message, tone = 'success') {
+  const item = document.createElement('div');
+  item.className = `toast ${tone}`;
+  item.innerHTML = `<i data-lucide="${tone === 'error' ? 'circle-alert' : tone === 'warning' ? 'triangle-alert' : 'circle-check'}"></i><span>${escapeHtml(message)}</span>`;
+  $('#toast-region').append(item);
+  refreshIcons();
+  requestAnimationFrame(() => item.classList.add('visible'));
+  setTimeout(() => {
+    item.classList.remove('visible');
+    setTimeout(() => item.remove(), 180);
+  }, 3200);
+}
+
+function updateScriptHighlights() {
+  const editor = $('#script-editor');
+  const highlights = $('#script-highlights');
+  if (!editor || !highlights) return;
+  highlights.innerHTML = `${escapeHtml(editor.value).replace(
+    /@\[Speaker\s+([1-4])\]/gi,
+    (_match, number) => `<mark class="speaker-token speaker-${number}">@[Speaker ${number}]</mark>`,
+  )}\n`;
+  highlights.scrollTop = editor.scrollTop;
+  highlights.scrollLeft = editor.scrollLeft;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(`${API}${path}`, options);
   if (!response.ok) {
@@ -105,10 +146,10 @@ function updateSetupProgress({ step, progress, message, detail }) {
 }
 
 async function runSetup() {
-  $('#magic-setup').disabled = true;
+  setButtonBusy($('#magic-setup'), true, 'Setting up…');
   show($('#error-message'), false);
   const result = await window.omniSpeak.runSetup();
-  $('#magic-setup').disabled = false;
+  setButtonBusy($('#magic-setup'), false);
   if (!result.ok) {
     $('#error-message').textContent = result.error;
     show($('#error-message'), true);
@@ -120,9 +161,9 @@ async function runSetup() {
 }
 
 async function startEngine() {
-  $('#start-engine').disabled = true;
+  setButtonBusy($('#start-engine'), true, 'Starting…');
   const result = await window.omniSpeak.startService();
-  $('#start-engine').disabled = false;
+  setButtonBusy($('#start-engine'), false);
   if (!result.ok) {
     $('#error-message').textContent = result.error;
     show($('#error-message'), true);
@@ -221,6 +262,7 @@ function parseDictionary(value) {
 function scheduleSave() {
   if (!state.currentProject) return;
   $('#save-status').textContent = 'Đang lưu…';
+  $('#save-status').dataset.state = 'saving';
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(saveCurrentProject, 700);
 }
@@ -234,8 +276,10 @@ async function saveCurrentProject() {
     });
     state.currentProject = project;
     $('#save-status').textContent = 'Đã lưu';
+    $('#save-status').dataset.state = 'saved';
   } catch (error) {
     $('#save-status').textContent = 'Lỗi lưu';
+    $('#save-status').dataset.state = 'error';
   }
 }
 
@@ -263,6 +307,7 @@ function loadProjectIntoStudio(project) {
   state.currentProject = project;
   $('#project-picker').value = project.id;
   $('#script-editor').value = project.script || '';
+  updateScriptHighlights();
   applySettings(project.settings || {});
   renderSpeakerList();
   updateCharCount();
@@ -272,9 +317,14 @@ function loadProjectIntoStudio(project) {
 }
 
 async function loadVoices() {
-  state.voices = await api('/api/voices');
-  renderVoices();
-  renderSpeakerList();
+  $('#refresh-voices').classList.add('is-spinning');
+  try {
+    state.voices = await api('/api/voices');
+    renderVoices();
+    renderSpeakerList();
+  } finally {
+    $('#refresh-voices').classList.remove('is-spinning');
+  }
 }
 
 function renderSpeakerList() {
@@ -363,8 +413,9 @@ function renderCurrentJob(job) {
   $('#job-status').textContent = job.status === 'pending' ? 'Queued' : job.status === 'running' ? 'Generating' : job.status;
   $('#job-percent').textContent = `${Math.round(job.progress)}%`;
   $('#job-progress-bar').style.width = `${job.progress}%`;
-  $('#queue-label').textContent = active ? job.status : 'Idle';
-  $('#generate-button').disabled = false;
+  $('#queue-label').textContent = active ? job.status : job.status === 'failed' ? 'Failed' : 'Idle';
+  $('#queue-label').className = job.status === 'failed' ? 'error' : active ? 'working' : '';
+  setButtonBusy($('#generate-button'), active, job.status === 'pending' ? 'Queued…' : 'Generating…');
   if (job.status === 'completed') renderPlayer(job);
   if (job.status === 'failed') {
     show($('#job-progress'), true);
@@ -421,7 +472,7 @@ async function createSpeechJob() {
   const text = $('#script-editor').value.trim();
   if (!text) return flashError('Nhập nội dung trước khi generate.');
   await saveCurrentProject();
-  $('#generate-button').disabled = true;
+  setButtonBusy($('#generate-button'), true, 'Queueing…');
   try {
     const job = await api('/api/jobs', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -432,7 +483,7 @@ async function createSpeechJob() {
     updateQueueCount();
     watchJob(job.id);
   } catch (error) {
-    $('#generate-button').disabled = false;
+    setButtonBusy($('#generate-button'), false);
     flashError(error.message);
   }
 }
@@ -440,6 +491,7 @@ async function createSpeechJob() {
 function flashError(message) {
   $('#queue-label').textContent = message;
   $('#queue-label').classList.add('error');
+  toast(message, 'error');
   setTimeout(() => { $('#queue-label').classList.remove('error'); $('#queue-label').textContent = 'Idle'; }, 4000);
 }
 
@@ -450,6 +502,7 @@ function insertText(text) {
   editor.setRangeText(`${spacer}${text}`, start, editor.selectionEnd, 'end');
   editor.focus();
   updateCharCount();
+  updateScriptHighlights();
   scheduleSave();
 }
 
@@ -469,11 +522,14 @@ async function analyzeCloneAudio() {
   if (!file) return;
   const form = new FormData();
   form.append('file', file);
-  $('#audio-analysis').textContent = 'Đang phân tích audio…';
+  $('#audio-analysis').className = 'audio-analysis is-loading';
+  $('#audio-analysis').innerHTML = '<span class="button-spinner"></span><span>Đang phân tích audio…</span>';
   try {
     const analysis = await api('/api/voices/analyze', { method: 'POST', body: form });
-    $('#audio-analysis').innerHTML = `<b>${analysis.duration_seconds}s</b><span>SNR ${analysis.snr_db} dB · silence ${Math.round(analysis.silence_ratio * 100)}%</span>${analysis.warnings.map((warning) => `<em>${escapeHtml(warning)}</em>`).join('')}`;
+    $('#audio-analysis').className = `audio-analysis ${analysis.warnings.length ? 'warning' : 'success'}`;
+    $('#audio-analysis').innerHTML = `<b>${analysis.duration_seconds}s · ${analysis.warnings.length ? 'Needs attention' : 'Reference ready'}</b><span>SNR ${analysis.snr_db} dB · silence ${Math.round(analysis.silence_ratio * 100)}%</span>${analysis.warnings.map((warning) => `<em>${escapeHtml(warning)}</em>`).join('')}`;
   } catch (error) {
+    $('#audio-analysis').className = 'audio-analysis error';
     $('#audio-analysis').textContent = error.message;
   }
 }
@@ -482,35 +538,42 @@ async function submitClone(event) {
   event.preventDefault();
   const formElement = event.currentTarget;
   const submitButton = event.submitter || formElement.querySelector('[type="submit"]');
-  if (submitButton) submitButton.disabled = true;
+  setButtonBusy(submitButton, true, 'Creating clone…');
   const form = new FormData(formElement);
+  $('#voice-form-status').className = 'form-status loading';
   $('#voice-form-status').textContent = 'Đang tạo clone prompt…';
   try {
     await api('/api/voices/clone', { method: 'POST', body: form });
     formElement.reset();
+    $('#audio-analysis').className = 'audio-analysis';
     $('#audio-analysis').textContent = 'Chọn WAV, MP3 hoặc M4A';
+    $('#voice-form-status').className = 'form-status success';
     $('#voice-form-status').textContent = 'Voice clone đã lưu.';
+    toast('Voice clone đã sẵn sàng với Fidelity v2.');
     await loadVoices();
-  } catch (error) { $('#voice-form-status').textContent = error.message; }
-  finally { if (submitButton) submitButton.disabled = false; }
+  } catch (error) { $('#voice-form-status').className = 'form-status error'; $('#voice-form-status').textContent = error.message; toast(error.message, 'error'); }
+  finally { setButtonBusy(submitButton, false); }
 }
 
 async function submitDesign(event) {
   event.preventDefault();
   const formElement = event.currentTarget;
   const submitButton = event.submitter || formElement.querySelector('[type="submit"]');
-  if (submitButton) submitButton.disabled = true;
+  setButtonBusy(submitButton, true, 'Designing voice…');
   const values = Object.fromEntries(new FormData(formElement));
   const description = [values.gender, values.age, values.pitch, values.accent, values.style].filter(Boolean).join(', ');
   const payload = { name: values.name, description, preview_text: values.preview_text, performance_mode: state.performanceMode };
+  $('#voice-form-status').className = 'form-status loading';
   $('#voice-form-status').textContent = 'Đang design và lưu voice…';
   try {
     await api('/api/voices/design', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     formElement.reset();
+    $('#voice-form-status').className = 'form-status success';
     $('#voice-form-status').textContent = 'Designed voice đã lưu.';
+    toast('Designed voice đã lưu.');
     await loadVoices();
-  } catch (error) { $('#voice-form-status').textContent = error.message; }
-  finally { if (submitButton) submitButton.disabled = false; }
+  } catch (error) { $('#voice-form-status').className = 'form-status error'; $('#voice-form-status').textContent = error.message; toast(error.message, 'error'); }
+  finally { setButtonBusy(submitButton, false); }
 }
 
 function bindEvents() {
@@ -524,7 +587,8 @@ function bindEvents() {
   $('#generate-button').addEventListener('click', createSpeechJob);
   $('#cancel-job').addEventListener('click', async () => { if (state.currentJob) await api(`/api/jobs/${state.currentJob.id}/cancel`, { method: 'POST' }); });
   $('#project-picker').addEventListener('change', () => loadProjectIntoStudio(state.projects.find((project) => project.id === $('#project-picker').value)));
-  $('#script-editor').addEventListener('input', () => { updateCharCount(); scheduleSave(); });
+  $('#script-editor').addEventListener('input', () => { updateCharCount(); updateScriptHighlights(); scheduleSave(); });
+  $('#script-editor').addEventListener('scroll', updateScriptHighlights);
   $$('[data-speaker-tag]').forEach((button) => button.addEventListener('click', () => insertText(`@[${button.dataset.speakerTag}] `)));
   $$('[data-sound-tag]').forEach((button) => button.addEventListener('click', () => insertText(button.dataset.soundTag)));
   ['language', 'speed', 'pitch', 'guidance', 'inference-steps', 'speaker-pause', 'sound-effect', 'normalize-text', 'remove-silence', 'pronunciation-dictionary'].forEach((id) => $(`#${id}`).addEventListener('input', () => { updateRangeLabels(); scheduleSave(); }));
@@ -556,6 +620,7 @@ window.omniSpeak.onRuntimeLog((line) => {
 async function initialize() {
   refreshIcons();
   bindEvents();
+  updateScriptHighlights();
   const status = await window.omniSpeak.getStatus();
   state.logs = status.recentLog || [];
   $('#runtime-log').textContent = state.logs.join('\n') || 'Chưa có log.';

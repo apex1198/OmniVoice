@@ -34,6 +34,8 @@ from omnivoice.utils.common import get_best_device
 LOGGER = logging.getLogger("omni-speak")
 SAMPLE_RATE = 24000
 ALLOWED_AUDIO = {".wav", ".mp3", ".m4a"}
+CLONE_PROMPT_VERSION = 2
+CLONE_CHUNK_CHARS = 180
 
 
 class ProjectInput(BaseModel):
@@ -76,6 +78,7 @@ class Engine:
 
     def load(self):
         LOGGER.info("Loading %s on %s", self.checkpoint, self.device)
+        self.db.recover_interrupted_jobs()
         self.model = OmniVoice.from_pretrained(
             self.checkpoint,
             device_map=self.device,
@@ -110,10 +113,35 @@ class Engine:
                 LOGGER.exception("Job %s failed", job["id"])
                 self.db.update_job(job["id"], status="failed", error=str(error))
 
-    def voice_args(self, voice_id):
-        voice = self.db.get_voice(voice_id)
-        if not voice:
-            raise ValueError(f"Saved voice not found: {voice_id}")
+    def rebuild_clone_prompt(self, voice):
+        source_path = Path(voice.get("source_audio_path") or "")
+        prompt_path = Path(voice.get("prompt_path") or "")
+        if not voice.get("source_audio_path") or not voice.get("prompt_path") or not source_path.exists():
+            return voice
+        LOGGER.info("Upgrading clone prompt %s for text fidelity", voice["id"])
+        try:
+            # Auto-transcribe after preprocessing so reference text and audio
+            # stay frame-aligned. Misalignment is the main source of leaked,
+            # skipped, or invented words in long cloned-voice generations.
+            prompt = self.model.create_voice_clone_prompt(
+                str(source_path),
+                None,
+                preprocess_prompt=True,
+            )
+            prompt.save(prompt_path)
+            metadata = {**(voice.get("metadata") or {}), "prompt_version": CLONE_PROMPT_VERSION}
+            voice = self.db.update_voice(
+                voice["id"],
+                transcript=prompt.ref_text,
+                metadata_json=json.dumps(metadata),
+            )
+        finally:
+            self.release_asr()
+        return voice
+
+    def voice_args(self, voice):
+        if voice.get("kind") == "clone" and (voice.get("metadata") or {}).get("prompt_version", 1) < CLONE_PROMPT_VERSION:
+            voice = self.rebuild_clone_prompt(voice)
         if voice.get("prompt_path"):
             return {"voice_clone_prompt": VoiceClonePrompt.load(voice["prompt_path"])}
         return {"instruct": voice.get("instruct")}
@@ -141,9 +169,14 @@ class Engine:
             voice_id = speaker_map.get(segment["speaker"])
             if not voice_id:
                 raise ValueError(f"No saved voice selected for {segment['speaker']}")
+            voice = self.db.get_voice(voice_id)
+            if not voice:
+                raise ValueError(f"Saved voice not found: {voice_id}")
             text = apply_pronunciation_dictionary(segment["text"], config.get("pronunciation_dictionary"))
+            requested_steps = normalize_inference_steps(config.get("inference_steps"))
+            inference_steps = max(16, requested_steps) if voice.get("kind") == "clone" else requested_steps
             generation_config = OmniVoiceGenerationConfig(
-                num_step=normalize_inference_steps(config.get("inference_steps")),
+                num_step=inference_steps,
                 guidance_scale=float(config.get("guidance_scale", 2.0)),
                 denoise=bool(config.get("denoise", True)),
                 preprocess_prompt=True,
@@ -157,7 +190,7 @@ class Engine:
                     generation_config=generation_config,
                     speed=float(config.get("speed", 1.0)),
                     normalize_text=bool(config.get("normalize_text", False)),
-                    **self.voice_args(voice_id),
+                    **self.voice_args(voice),
                 )[0]
             generated = self.apply_audio_effects(generated, config)
             sf.write(output_path, generated, SAMPLE_RATE)
@@ -306,14 +339,24 @@ def create_app(engine):
             source_path.unlink(missing_ok=True)
             raise HTTPException(400, "; ".join(analysis["warnings"]))
         prompt_path = engine.voices_dir / f"{voice_id}.pt"
-        auto_transcribe = not transcript.strip()
         with engine.model_lock:
             try:
-                prompt = engine.model.create_voice_clone_prompt(str(source_path), transcript.strip() or None)
+                # Always derive ref_text from the processed reference. A user
+                # transcript can describe the original file but becomes
+                # misaligned after silence removal or >20s trimming.
+                prompt = engine.model.create_voice_clone_prompt(
+                    str(source_path),
+                    None,
+                    preprocess_prompt=True,
+                )
                 prompt.save(prompt_path)
             finally:
-                if auto_transcribe:
-                    engine.release_asr()
+                engine.release_asr()
+        metadata = {
+            **analysis,
+            "prompt_version": CLONE_PROMPT_VERSION,
+            "provided_transcript": transcript.strip() or None,
+        }
         return engine.db.save_voice({
             "id": voice_id,
             "name": name.strip(),
@@ -321,7 +364,7 @@ def create_app(engine):
             "prompt_path": str(prompt_path),
             "source_audio_path": str(source_path),
             "transcript": prompt.ref_text,
-            "metadata": analysis,
+            "metadata": metadata,
         })
 
     @app.post("/api/voices/design")
@@ -413,9 +456,12 @@ def create_app(engine):
             if not voice_id or not engine.db.get_voice(voice_id):
                 raise HTTPException(400, f"Select a saved voice for {speaker}")
         chunks = []
-        max_chars = int(payload.config.get("chunk_chars", 450))
+        max_chars = max(80, min(int(payload.config.get("chunk_chars", 450)), 450))
+        clone_max_chars = max(80, min(int(payload.config.get("clone_chunk_chars", CLONE_CHUNK_CHARS)), 240))
         for segment in script_segments:
-            chunks.extend({"speaker": segment["speaker"], "text": text} for text in split_long_text(segment["text"], max_chars))
+            voice = engine.db.get_voice(payload.speaker_map[segment["speaker"]])
+            segment_limit = clone_max_chars if voice.get("kind") == "clone" else max_chars
+            chunks.extend({"speaker": segment["speaker"], "text": text} for text in split_long_text(segment["text"], segment_limit))
         engine.db.save_project({
             "id": payload.project_id,
             "name": engine.db.get_project(payload.project_id)["name"],
