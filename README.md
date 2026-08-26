@@ -157,6 +157,12 @@ dialogue with one of these prefixes:
 @[Speaker 4] Every render is stored in the project history.
 ```
 
+In the Studio editor, select a passage and press `Command+1` through
+`Command+4` to assign the corresponding speaker. Long scripts are split at
+paragraph and sentence boundaries, rendered segment by segment, and merged
+with context-aware silence padding. Auto pacing uses shorter pauses inside a
+speaker turn and longer pauses at paragraph or speaker transitions.
+
 Build the unsigned local application with:
 
 ```bash

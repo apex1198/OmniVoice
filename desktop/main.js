@@ -87,7 +87,8 @@ function probeService(timeout = 2200) {
       response.on('end', () => {
         try {
           const health = JSON.parse(body);
-          resolve(response.statusCode === 200 && health.app === 'Omni Speak' && health.ready === true);
+          resolve(response.statusCode === 200 && health.app === 'Omni Speak' && health.ready === true
+            && health.version === app.getVersion());
         } catch {
           resolve(false);
         }

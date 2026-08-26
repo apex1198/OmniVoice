@@ -23,8 +23,9 @@ from core import (
     new_id,
     normalize_inference_steps,
     normalize_voice_design_description,
+    natural_pause_ms,
     parse_multispeaker_script,
-    split_long_text,
+    smart_text_chunks,
 )
 from omnivoice import OmniVoice, OmniVoiceGenerationConfig, VoiceClonePrompt
 from omnivoice.utils.audio import load_waveform
@@ -36,6 +37,7 @@ SAMPLE_RATE = 24000
 ALLOWED_AUDIO = {".wav", ".mp3", ".m4a"}
 CLONE_PROMPT_VERSION = 2
 CLONE_CHUNK_CHARS = 180
+APP_VERSION = "1.1.0"
 
 
 class ProjectInput(BaseModel):
@@ -198,8 +200,6 @@ class Engine:
             self.db.update_segment(segment["id"], status="completed", output_path=str(output_path), error=None)
             self.db.update_job(job_id, progress=round((index + 1) / total * 100, 1))
 
-        pause_ms = int(config.get("speaker_pause_ms", 220))
-        pause = np.zeros(int(SAMPLE_RATE * pause_ms / 1000), dtype=np.float32)
         timeline = []
         merged = []
         cursor_ms = 0
@@ -209,6 +209,8 @@ class Engine:
             merged.append(waveform)
             cursor_ms += duration_ms
             if index < len(completed_audio) - 1:
+                pause_ms = int(segment.get("pause_after_ms", 0))
+                pause = np.zeros(int(SAMPLE_RATE * pause_ms / 1000), dtype=np.float32)
                 merged.append(pause)
                 cursor_ms += pause_ms
         final_audio = np.concatenate(merged) if merged else np.zeros(1, dtype=np.float32)
@@ -287,6 +289,7 @@ def create_app(engine):
     def health():
         return {
             "app": "Omni Speak",
+            "version": APP_VERSION,
             "ready": engine.model is not None,
             "device": engine.device,
             "asr_loaded": bool(engine.model and getattr(engine.model, "_asr_pipe", None)),
@@ -461,7 +464,11 @@ def create_app(engine):
         for segment in script_segments:
             voice = engine.db.get_voice(payload.speaker_map[segment["speaker"]])
             segment_limit = clone_max_chars if voice.get("kind") == "clone" else max_chars
-            chunks.extend({"speaker": segment["speaker"], "text": text} for text in split_long_text(segment["text"], segment_limit))
+            chunks.extend({"speaker": segment["speaker"], **item} for item in smart_text_chunks(segment["text"], segment_limit))
+        pause_setting = payload.config.get("speaker_pause_ms", "auto")
+        for index, chunk in enumerate(chunks):
+            next_chunk = chunks[index + 1] if index + 1 < len(chunks) else None
+            chunk["pause_after_ms"] = natural_pause_ms(chunk, next_chunk, pause_setting)
         engine.db.save_project({
             "id": payload.project_id,
             "name": engine.db.get_project(payload.project_id)["name"],

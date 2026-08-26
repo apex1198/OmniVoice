@@ -2,6 +2,11 @@
 
 Native macOS Electron shell for OmniVoice.
 
+Studio supports up to four speakers. Select text and use `Command+1` through
+`Command+4` to assign a speaker. Smart Chunking keeps paragraph and sentence
+boundaries intact, while Auto silence padding adjusts pacing between chunks,
+paragraphs, and speaker changes.
+
 ## Development
 
 ```bash

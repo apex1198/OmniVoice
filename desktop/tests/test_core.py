@@ -11,7 +11,9 @@ from core import (
     apply_pronunciation_dictionary,
     normalize_inference_steps,
     normalize_voice_design_description,
+    natural_pause_ms,
     parse_multispeaker_script,
+    smart_text_chunks,
     split_long_text,
 )
 
@@ -44,6 +46,24 @@ class LongFormTests(unittest.TestCase):
         chunks = split_long_text(text, max_chars=120)
         self.assertTrue(all(len(chunk) <= 120 for chunk in chunks))
         self.assertEqual("".join(chunks), text)
+
+    def test_smart_chunks_preserve_paragraph_boundaries(self):
+        chunks = smart_text_chunks("First paragraph.\n\nSecond paragraph. Another sentence.", max_chars=30)
+        self.assertEqual(chunks[0]["boundary"], "paragraph")
+        self.assertEqual(chunks[-1]["boundary"], "end")
+        self.assertEqual([item["text"] for item in chunks], [
+            "First paragraph.", "Second paragraph.", "Another sentence.",
+        ])
+
+    def test_natural_pause_is_longer_for_speaker_change_and_paragraph(self):
+        first = {"speaker": "Speaker 1", "text": "Are you ready?", "boundary": "sentence"}
+        same = {"speaker": "Speaker 1", "text": "Yes."}
+        other = {"speaker": "Speaker 2", "text": "Yes."}
+        self.assertEqual(natural_pause_ms(first, same), 320)
+        self.assertEqual(natural_pause_ms(first, other), 720)
+        first["boundary"] = "paragraph"
+        self.assertEqual(natural_pause_ms(first, other), 900)
+        self.assertEqual(natural_pause_ms(first, other, 400), 400)
 
     def test_pronunciation_dictionary(self):
         result = apply_pronunciation_dictionary("OpenAI uses TTS", [

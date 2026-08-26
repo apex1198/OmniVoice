@@ -177,6 +177,7 @@ async function startEngine() {
 
 function projectSettings() {
   const performanceMode = $('#performance-mode').checked;
+  const automaticPacing = $('#speaker-pause').value === 'auto';
   return {
     speaker_map: state.speakerMap,
     language: $('#language').value,
@@ -184,7 +185,8 @@ function projectSettings() {
     pitch_semitones: performanceMode ? 0 : Number($('#pitch').value),
     guidance_scale: Number($('#guidance').value),
     inference_steps: performanceMode ? 8 : Number($('#inference-steps').value),
-    speaker_pause_ms: Number($('#speaker-pause').value),
+    speaker_pause_ms: automaticPacing ? 'auto' : Number($('#speaker-pause').value),
+    natural_pacing: automaticPacing,
     pronunciation_dictionary: parseDictionary($('#pronunciation-dictionary').value),
     sound_effect: performanceMode ? 'none' : $('#sound-effect').value,
     normalize_text: $('#normalize-text').checked,
@@ -203,11 +205,14 @@ function applySettings(settings = {}) {
     sound_effect: settings.performance_restore?.sound_effect ?? settings.sound_effect ?? 'none',
     remove_silence: settings.performance_restore?.remove_silence ?? (settings.remove_silence !== false),
   };
+  const pauseSetting = settings.natural_pacing == null
+    ? 'auto'
+    : (settings.natural_pacing ? 'auto' : (settings.speaker_pause_ms ?? 700));
   const values = {
     language: settings.language || 'auto', speed: settings.speed ?? 1,
     pitch: performanceMode ? 0 : (settings.pitch_semitones ?? 0), guidance: settings.guidance_scale ?? 2,
     'inference-steps': performanceMode ? 8 : (settings.inference_steps ?? 32),
-    'speaker-pause': settings.speaker_pause_ms ?? 220,
+    'speaker-pause': pauseSetting,
     'sound-effect': performanceMode ? 'none' : (settings.sound_effect || 'none'),
   };
   Object.entries(values).forEach(([id, value]) => {
@@ -339,7 +344,7 @@ function renderSpeakerList() {
     select.value = state.speakerMap[select.dataset.speakerSelect] || '';
     select.addEventListener('change', () => { state.speakerMap[select.dataset.speakerSelect] = select.value; scheduleSave(); });
   });
-  $$('[data-insert-speaker]').forEach((button) => button.addEventListener('click', () => insertText(`@[${button.dataset.insertSpeaker}] `)));
+  $$('[data-insert-speaker]').forEach((button) => button.addEventListener('click', () => assignSpeaker(Number(button.dataset.insertSpeaker.slice(-1)))));
   refreshIcons();
 }
 
@@ -506,6 +511,38 @@ function insertText(text) {
   scheduleSave();
 }
 
+function speakerAtPosition(text, position) {
+  const pattern = /@\[Speaker\s+([1-4])\]/gi;
+  let speaker = 1;
+  for (const match of text.slice(0, position).matchAll(pattern)) speaker = Number(match[1]);
+  return speaker;
+}
+
+function assignSpeaker(number) {
+  const editor = $('#script-editor');
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  if (start === end) {
+    insertText(`@[Speaker ${number}] `);
+    return;
+  }
+
+  const source = editor.value;
+  const selected = source.slice(start, end).replace(/@\[Speaker\s+[1-4]\]\s*/gi, '');
+  const restoreSpeaker = speakerAtPosition(source, end);
+  const suffix = source.slice(end);
+  const restore = suffix && !/^\s*@\[Speaker\s+[1-4]\]/i.test(suffix)
+    ? ` @[Speaker ${restoreSpeaker}] `
+    : '';
+  const replacement = `@[Speaker ${number}] ${selected.trim()}${restore}`;
+  editor.setRangeText(replacement, start, end, 'select');
+  editor.focus();
+  updateCharCount();
+  updateScriptHighlights();
+  scheduleSave();
+  toast(`Đã gán Speaker ${number}.`);
+}
+
 function updateCharCount() {
   $('#char-count').textContent = `${$('#script-editor').value.length.toLocaleString()} ký tự`;
 }
@@ -589,7 +626,13 @@ function bindEvents() {
   $('#project-picker').addEventListener('change', () => loadProjectIntoStudio(state.projects.find((project) => project.id === $('#project-picker').value)));
   $('#script-editor').addEventListener('input', () => { updateCharCount(); updateScriptHighlights(); scheduleSave(); });
   $('#script-editor').addEventListener('scroll', updateScriptHighlights);
-  $$('[data-speaker-tag]').forEach((button) => button.addEventListener('click', () => insertText(`@[${button.dataset.speakerTag}] `)));
+  $('#script-editor').addEventListener('keydown', (event) => {
+    if (event.metaKey && !event.altKey && !event.shiftKey && /^[1-4]$/.test(event.key)) {
+      event.preventDefault();
+      assignSpeaker(Number(event.key));
+    }
+  });
+  $$('[data-speaker-tag]').forEach((button) => button.addEventListener('click', () => assignSpeaker(Number(button.dataset.speakerTag.slice(-1)))));
   $$('[data-sound-tag]').forEach((button) => button.addEventListener('click', () => insertText(button.dataset.soundTag)));
   ['language', 'speed', 'pitch', 'guidance', 'inference-steps', 'speaker-pause', 'sound-effect', 'normalize-text', 'remove-silence', 'pronunciation-dictionary'].forEach((id) => $(`#${id}`).addEventListener('input', () => { updateRangeLabels(); scheduleSave(); }));
   $('#performance-mode').addEventListener('change', () => { setPerformanceMode($('#performance-mode').checked); scheduleSave(); });

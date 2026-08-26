@@ -8,6 +8,7 @@ from pathlib import Path
 
 SPEAKER_PATTERN = re.compile(r"@\[\s*(Speaker\s+[1-4])\s*\]", re.IGNORECASE)
 SENTENCE_PATTERN = re.compile(r"(?<=[.!?。！？])\s+")
+PARAGRAPH_PATTERN = re.compile(r"\n\s*\n+")
 JSON_COLUMNS = {"settings_json", "metadata_json", "speaker_map_json", "config_json"}
 VOICE_DESIGN_ENGLISH_ITEMS = {
     "american accent", "australian accent", "british accent", "canadian accent",
@@ -85,12 +86,12 @@ def parse_multispeaker_script(text):
 
 
 def split_long_text(text, max_chars=450):
-    text = re.sub(r"\s+", " ", (text or "")).strip()
-    if not text:
-        return []
-    sentences = SENTENCE_PATTERN.split(text)
-    chunks = []
-    current = ""
+    return [item["text"] for item in smart_text_chunks(text, max_chars)]
+
+
+def _split_paragraph(paragraph, max_chars):
+    sentences = SENTENCE_PATTERN.split(re.sub(r"\s+", " ", paragraph).strip())
+    chunks, current = [], ""
     for sentence in sentences:
         if len(sentence) > max_chars:
             words = sentence.split()
@@ -117,6 +118,46 @@ def split_long_text(text, max_chars=450):
     if current:
         chunks.append(current)
     return chunks
+
+
+def smart_text_chunks(text, max_chars=450):
+    """Split long-form text without crossing paragraph or sentence boundaries."""
+    source = (text or "").strip()
+    if not source:
+        return []
+    paragraphs = [item.strip() for item in PARAGRAPH_PATTERN.split(source) if item.strip()]
+    result = []
+    for paragraph_index, paragraph in enumerate(paragraphs):
+        chunks = _split_paragraph(paragraph, max_chars)
+        for chunk_index, chunk in enumerate(chunks):
+            is_last_chunk = chunk_index == len(chunks) - 1
+            boundary = "paragraph" if is_last_chunk and paragraph_index < len(paragraphs) - 1 else "sentence"
+            result.append({"text": chunk, "boundary": boundary})
+    if result:
+        result[-1]["boundary"] = "end"
+    return result
+
+
+def natural_pause_ms(segment, next_segment, setting="auto"):
+    if next_segment is None:
+        return 0
+    if setting not in (None, "", "auto"):
+        return max(0, min(int(setting), 3000))
+
+    speaker_changed = segment["speaker"] != next_segment["speaker"]
+    boundary = segment.get("boundary", "sentence")
+    text = segment.get("text", "").rstrip()
+    if speaker_changed:
+        if boundary == "paragraph":
+            return 900
+        if text.endswith(("?", "!", "？", "！")):
+            return 720
+        return 650
+    if boundary == "paragraph":
+        return 520
+    if text.endswith(("?", "!", "？", "！")):
+        return 320
+    return 180
 
 
 def apply_pronunciation_dictionary(text, entries):
@@ -206,6 +247,8 @@ class Database:
                     start_ms INTEGER,
                     end_ms INTEGER,
                     error TEXT,
+                    boundary TEXT NOT NULL DEFAULT 'sentence',
+                    pause_after_ms INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
@@ -213,6 +256,11 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_segments_job ON segments(job_id, position);
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(segments)")}
+            if "boundary" not in columns:
+                db.execute("ALTER TABLE segments ADD COLUMN boundary TEXT NOT NULL DEFAULT 'sentence'")
+            if "pause_after_ms" not in columns:
+                db.execute("ALTER TABLE segments ADD COLUMN pause_after_ms INTEGER NOT NULL DEFAULT 0")
             now = now_iso()
             db.execute(
                 "INSERT OR IGNORE INTO projects(id,name,script,settings_json,created_at,updated_at) VALUES(?,?,?,?,?,?)",
@@ -316,8 +364,10 @@ class Database:
             )
             for index, item in enumerate(segment_items):
                 db.execute(
-                    "INSERT INTO segments(id,job_id,position,speaker,text,status) VALUES(?,?,?,?,?,?)",
-                    (new_id("segment"), job_id, index, item["speaker"], item["text"], "pending"),
+                    """INSERT INTO segments(id,job_id,position,speaker,text,status,boundary,pause_after_ms)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    (new_id("segment"), job_id, index, item["speaker"], item["text"], "pending",
+                     item.get("boundary", "sentence"), int(item.get("pause_after_ms", 0))),
                 )
         return self.get_job(job_id)
 

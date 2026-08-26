@@ -48,6 +48,7 @@ class ApiTests(unittest.TestCase):
     def test_health_projects_and_voices(self):
         health = self.client.get("/api/health").json()
         self.assertEqual(health["app"], "Omni Speak")
+        self.assertEqual(health["version"], "1.1.0")
         self.assertTrue(health["ready"])
         self.assertFalse(health["asr_loaded"])
         self.assertEqual(len(self.client.get("/api/projects").json()), 1)
@@ -116,6 +117,18 @@ class ApiTests(unittest.TestCase):
         }).json()
         self.assertGreater(len(job["segments"]), 1)
         self.assertTrue(all(len(segment["text"]) <= 180 for segment in job["segments"]))
+
+    def test_smart_chunking_adds_natural_speaker_padding(self):
+        voices = self.client.get("/api/voices").json()
+        job = self.client.post("/api/jobs", json={
+            "project_id": "project_inbox",
+            "text": "@[Speaker 1] First paragraph.\n\nSecond paragraph. @[Speaker 2] A reply?",
+            "speaker_map": {"Speaker 1": voices[0]["id"], "Speaker 2": voices[1]["id"]},
+            "config": {"chunk_chars": 80, "speaker_pause_ms": "auto"},
+        }).json()
+        self.assertEqual(job["segments"][0]["boundary"], "paragraph")
+        self.assertEqual(job["segments"][0]["pause_after_ms"], 520)
+        self.assertEqual(job["segments"][1]["pause_after_ms"], 650)
 
 if __name__ == "__main__":
     unittest.main()
