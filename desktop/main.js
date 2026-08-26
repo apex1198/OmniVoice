@@ -5,7 +5,9 @@ const http = require('node:http');
 const path = require('node:path');
 
 const SERVICE_URL = 'http://127.0.0.1:8001';
-const SETUP_STEPS = ['runtime', 'package', 'models', 'engine'];
+const SETUP_STEPS = ['python', 'runtime', 'package', 'models', 'engine'];
+const PYTHON_VERSION = '3.12';
+const UV_INSTALLER_URL = 'https://astral.sh/uv/install.sh';
 
 let mainWindow;
 let setupPromise;
@@ -18,6 +20,12 @@ function appPaths() {
   return {
     support,
     runtime,
+    tools: path.join(runtime, 'tools'),
+    uv: path.join(runtime, 'tools', 'uv'),
+    uvInstaller: path.join(runtime, 'uv-install.sh'),
+    uvCache: path.join(runtime, 'cache'),
+    managedPython: path.join(runtime, 'python'),
+    pythonBin: path.join(runtime, 'python-bin'),
     venv: path.join(runtime, 'venv'),
     state: path.join(runtime, 'state.json'),
     logs: path.join(support, 'logs'),
@@ -124,19 +132,29 @@ function commandPath(name) {
 
 function pythonVersion(candidate) {
   if (!candidate) return null;
-  const result = spawnSync(candidate, ['-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'], {
+  const result = spawnSync(candidate, ['-c', 'import json, platform, sys; print(json.dumps({"version": f"{sys.version_info.major}.{sys.version_info.minor}", "machine": platform.machine()}))'], {
     encoding: 'utf8',
   });
   if (result.status !== 0) return null;
-  const version = result.stdout.trim();
+  let details;
+  try {
+    details = JSON.parse(result.stdout.trim());
+  } catch {
+    return null;
+  }
+  const { version, machine } = details;
   const [major, minor] = version.split('.').map(Number);
-  return major === 3 && minor >= 10 && minor <= 13 ? { path: candidate, version } : null;
+  const compatibleVersion = major === 3 && minor >= 10 && minor <= 13;
+  const compatibleArchitecture = process.arch !== 'arm64' || machine === 'arm64';
+  return compatibleVersion && compatibleArchitecture ? { path: candidate, version, machine } : null;
 }
 
 async function findPython() {
+  emitSetup('python', 3, 'Đang kiểm tra Python', 'Yêu cầu Python 3.10-3.13 ARM64');
   const candidates = [
     process.env.OMNI_SPEAK_PYTHON,
-    '/Users/alexcrearive/.local/bin/python3.12',
+    executable(appPaths().venv, 'python'),
+    path.join(app.getPath('home'), '.local', 'bin', 'python3.12'),
     '/opt/homebrew/bin/python3.12',
     '/usr/local/bin/python3.12',
     commandPath('python3.12'),
@@ -146,29 +164,74 @@ async function findPython() {
   ];
   for (const candidate of [...new Set(candidates.filter(Boolean))]) {
     const match = pythonVersion(candidate);
-    if (match) return match;
+    if (match) {
+      emitSetup('python', 10, `Python ${match.version} đã sẵn sàng`, match.machine === 'arm64' ? 'Apple Silicon native' : match.machine);
+      return match;
+    }
   }
 
-  const uv = findUv();
-  if (uv) {
-    emitSetup('runtime', 8, 'Đang tải Python 3.12', 'Sử dụng uv runtime manager');
-    await runProcess(uv, ['python', 'install', '3.12']);
-    const found = spawnSync(uv, ['python', 'find', '3.12'], { encoding: 'utf8' });
-    const match = pythonVersion(found.stdout.trim());
-    if (match) return match;
+  const uv = await ensureUv();
+  const uvEnv = managedUvEnv();
+  emitSetup('python', 7, `Đang tải Python ${PYTHON_VERSION}`, 'Bản ARM64 riêng cho Omni Speak');
+  await runProcess(uv, ['python', 'install', PYTHON_VERSION], { env: uvEnv });
+  const found = spawnSync(uv, ['python', 'find', '--managed-python', '--no-project', PYTHON_VERSION], {
+    encoding: 'utf8',
+    env: { ...process.env, ...uvEnv },
+  });
+  const match = pythonVersion(found.stdout.trim());
+  if (match) {
+    emitSetup('python', 10, `Đã cài Python ${match.version}`, 'Apple Silicon native');
+    return match;
   }
-  throw new Error('Cần Python 3.10-3.13. Hãy cài Python 3.12 rồi chạy Magic Setup lại.');
+  throw new Error(`Không thể cài Python ${PYTHON_VERSION} ARM64. Kiểm tra kết nối mạng rồi chạy Magic Setup lại.`);
 }
 
 function findUv() {
   const candidates = [
     process.env.OMNI_SPEAK_UV,
-    '/Users/alexcrearive/.local/bin/uv',
+    appPaths().uv,
+    path.join(app.getPath('home'), '.local', 'bin', 'uv'),
     '/opt/homebrew/bin/uv',
     '/usr/local/bin/uv',
     commandPath('uv'),
   ];
   return [...new Set(candidates.filter(Boolean))].find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function managedUvEnv() {
+  const paths = appPaths();
+  return {
+    UV_CACHE_DIR: paths.uvCache,
+    UV_PYTHON_INSTALL_DIR: paths.managedPython,
+    UV_PYTHON_BIN_DIR: paths.pythonBin,
+  };
+}
+
+async function ensureUv() {
+  const existing = findUv();
+  if (existing) return existing;
+
+  const paths = appPaths();
+  fs.mkdirSync(paths.tools, { recursive: true });
+  emitSetup('python', 5, 'Đang chuẩn bị trình cài Python', 'Tải runtime manager từ Astral');
+  await runProcess('/usr/bin/curl', [
+    '--proto',
+    '=https',
+    '--tlsv1.2',
+    '-LsSf',
+    UV_INSTALLER_URL,
+    '-o',
+    paths.uvInstaller,
+  ]);
+  await runProcess('/bin/sh', [paths.uvInstaller], {
+    env: {
+      UV_UNMANAGED_INSTALL: paths.tools,
+      UV_NO_MODIFY_PATH: '1',
+    },
+  });
+  const check = spawnSync(paths.uv, ['--version'], { encoding: 'utf8' });
+  if (check.status !== 0) throw new Error('Không thể chuẩn bị trình cài Python tự động.');
+  return paths.uv;
 }
 
 async function installRuntime(python) {
@@ -187,9 +250,12 @@ async function installRuntime(python) {
   ];
   fs.mkdirSync(paths.runtime, { recursive: true });
 
+  if (fs.existsSync(venvPython) && !pythonVersion(venvPython)) {
+    fs.renameSync(paths.venv, `${paths.venv}-incompatible-${Date.now()}`);
+  }
   if (!fs.existsSync(venvPython)) {
-    emitSetup('runtime', 14, 'Đang tạo runtime riêng', `Python ${python.version}`);
-    if (uv) await runProcess(uv, ['venv', '--python', python.path, paths.venv]);
+    emitSetup('runtime', 16, 'Đang tạo runtime riêng', `Python ${python.version} ${python.machine}`);
+    if (uv) await runProcess(uv, ['venv', '--python', python.path, paths.venv], { env: managedUvEnv() });
     else await runProcess(python.path, ['-m', 'venv', paths.venv]);
   }
 
@@ -202,7 +268,7 @@ async function installRuntime(python) {
       venvPython,
       ...coreDependencies,
       paths.source,
-    ]);
+    ], { env: managedUvEnv() });
   } else {
     await runProcess(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip']);
     await runProcess(venvPython, [
@@ -290,14 +356,14 @@ async function runSetup() {
   if (setupPromise) return setupPromise;
   setupPromise = (async () => {
     try {
-      emitSetup('runtime', 3, 'Đang kiểm tra máy', 'Tìm Python và Apple GPU');
+      emitSetup('python', 2, 'Đang kiểm tra máy', 'Tìm Python và Apple GPU');
       const python = await findPython();
       const venvPython = await installRuntime(python);
       await downloadModels(venvPython);
       emitSetup('engine', 78, 'Đang khởi động engine', 'Nạp model vào Apple MPS');
       await startService();
       await waitForService();
-      writeState({ installed: true, python: python.path, installedAt: new Date().toISOString() });
+      writeState({ installed: true, python: venvPython, pythonVersion: python.version, pythonArchitecture: python.machine, installedAt: new Date().toISOString() });
       emitSetup('engine', 100, 'Omni Speak đã sẵn sàng', 'Engine đang chạy cục bộ');
       return { ok: true, url: SERVICE_URL };
     } catch (error) {
@@ -314,10 +380,12 @@ async function runSetup() {
 async function currentStatus() {
   const paths = appPaths();
   const online = await probeService();
-  const installed = fs.existsSync(executable(paths.venv, 'python')) && fs.existsSync(paths.backend);
+  const python = pythonVersion(executable(paths.venv, 'python'));
+  const installed = Boolean(python) && fs.existsSync(paths.backend);
   return {
     online,
     installed,
+    python,
     state: readState(),
     serviceUrl: SERVICE_URL,
     dataPath: paths.data,

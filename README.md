@@ -137,10 +137,13 @@ For full usage, see the [Python API](#python-api) and [Command-Line Tools](#comm
 ## Omni Speak for macOS
 
 The `desktop/` directory contains Omni Speak, a native Electron workspace for
-Apple Silicon Macs. On first launch, **Magic Setup** creates an isolated Python
-runtime, installs the local FastAPI engine, and downloads the OmniVoice and
-Whisper models. Models, saved voices, projects, jobs, and generated audio stay
-under `~/Library/Application Support/omni-speak/`.
+Apple Silicon Macs. On first launch, **Magic Setup** checks for a compatible
+native Python and automatically downloads Python 3.12 arm64 when needed. It
+then creates an isolated runtime, installs the local FastAPI engine, and
+downloads the OmniVoice and Whisper models. The managed Python, models, saved
+voices, projects, jobs, and generated audio stay under
+`~/Library/Application Support/omni-speak/` without modifying Homebrew or the
+user's shell profile.
 
 Omni Speak includes Voice Clone, Voice Design, persistent saved voices,
 projects, render history, a resumable long-form queue, WAV/FLAC export, and up

@@ -21,7 +21,10 @@ The arm64 app bundle is written to:
 /Users/alexcrearive/Documents/ChatGPT/OmniSpeakBuild/mac-arm64/Omni Speak.app
 ```
 
-At runtime, Magic Setup creates a Python environment under
-`~/Library/Application Support/omni-speak/runtime`, downloads the OmniVoice
-and Whisper checkpoints through Hugging Face, and starts the local service on
-`127.0.0.1:8001`.
+At runtime, Magic Setup checks for a compatible native Python. If none is
+available, it downloads Python 3.12 arm64 through Astral uv. The managed Python,
+virtual environment, and cache stay under
+`~/Library/Application Support/omni-speak/runtime`; Magic Setup does not modify
+the user's shell profile or Homebrew installation. It then downloads the
+OmniVoice and Whisper checkpoints through Hugging Face and starts the local
+service on `127.0.0.1:8001`.

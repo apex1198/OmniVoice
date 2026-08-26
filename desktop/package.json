@@ -1,6 +1,6 @@
 {
   "name": "omni-speak",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Native macOS desktop shell for OmniVoice",
   "main": "main.js",
   "author": "Omni Speak",

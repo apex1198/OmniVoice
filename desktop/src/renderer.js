@@ -136,7 +136,7 @@ function updateSetupProgress({ step, progress, message, detail }) {
   $('#progress-message').textContent = message;
   $('#progress-detail').textContent = detail;
   $('#setup-copy').textContent = 'Giữ cửa sổ này mở trong khi setup hoàn tất.';
-  const order = ['runtime', 'package', 'models', 'engine'];
+  const order = ['python', 'runtime', 'package', 'models', 'engine'];
   const current = order.indexOf(step);
   $$('#setup-steps [data-step]').forEach((item) => {
     const index = order.indexOf(item.dataset.step);
